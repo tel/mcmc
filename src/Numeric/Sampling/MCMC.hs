@@ -14,6 +14,7 @@
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE ConstraintKinds #-}
+
 module Numeric.Sampling.MCMC where
 
 import Control.Applicative
@@ -48,7 +49,6 @@ type VF   f a   = Point f a -> f a
 -- | Stepper of a location (a proposal distribution or a final
 -- stepping distribution).
 type Jump m f a = Point f a -> m (Point f a)
-
 
 -- | Takes a single, symmetric Metropolis-Hastings step according to
 -- the given proposal distribution and goal log-likelihood.
@@ -163,8 +163,9 @@ modifyPrimRefM' var f = toRand $ \gen -> do
 
 -- | Burn-in then sample `n` points from any jumping algorithm
 
-sample :: IsPrim m => (a -> Rand m a) -> Int -> Int -> a -> Rand m (V.Vector a)
-sample jump burn n x0 = do
+sample :: IsPrim m => Int -> Int -> Point f a
+          -> Jump (Rand m) f a -> Rand m (V.Vector (Point f a))
+sample burn n x0 jump = do
   ref <- liftPrim (newPrimRef x0)
   replicateM_ burn $ modifyPrimRefM ref jump
   V.replicateM n $ modifyPrimRefM ref jump
@@ -173,16 +174,16 @@ sample jump burn n x0 = do
 -- -- | Reified sampling stream
 
 stream
-  :: IsPrim m => Jump (Rand m) f a -> Int -> Point f a -> Producer (Point f a) (Rand m) r
-stream jump burn x0 = do
-  ref <- lift $ do ref <- liftPrim (newPrimRef x0)
-                   replicateM_ burn $ modifyPrimRefM ref jump
-                   return ref
+  :: IsPrim m => Int -> Point f a
+     -> Jump (Rand m) f a -> Producer (Point f a) (Rand m) r
+stream burn x0 jump = do
+  ref <- lift $ liftPrim (newPrimRef x0)
+  lift $ replicateM_ burn $ modifyPrimRefM ref jump
   forever $ lift (modifyPrimRefM ref jump) >>= yield
 
 
--- uniQ :: (Num a, Variate a, PrimMonad m) => Gen (PrimState m) -> Jump m V1 a
--- uniQ gen _ = liftM return $ uniformR (0, 1) gen
+uniQ :: (Num a, Variate a, MonadPrim m) => Jump (Rand m) V1 a
+uniQ _ = liftM return $ uniformR (0, 1)
 
--- lik :: Floating a => LL V1 a
--- lik (P (V1 x)) = x
+lik :: Floating a => LL V1 a
+lik (P (V1 x)) = x
