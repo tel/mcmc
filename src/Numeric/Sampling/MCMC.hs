@@ -37,7 +37,7 @@ import System.Random.MWC.Monad
 import System.Random.MWC.Distributions.Monad
 import qualified Data.Vector as V
 
-import Linear.V1
+import Linear.V2
 
 -- | Loglik. I'd love to use "Numeric.Log" to tag the output value as
 -- log domain, but that won't play nicely with "Numeric.AD".
@@ -175,9 +175,8 @@ stream burn x0 jump = do
   lift $ replicateM_ burn $ modifyPrimRefM ref jump
   forever $ lift (modifyPrimRefM ref jump) >>= yield
 
+flick :: MonadPrim m => Double -> Double -> Rand m (V2 Double)
+flick mu sig = V2 <$> normal mu sig <*> normal mu sig
 
-uniQ :: (Num a, Variate a, MonadPrim m) => Jump (Rand m) V1 a
-uniQ _ = liftM return $ uniformR (0, 1)
-
-lik :: Floating a => LL V1 a
-lik (P (V1 x)) = x
+rosen :: Num a => LL V2 a
+rosen (P (V2 x y)) = (1 - x)^2 + 100 * (y - x ^ 2)^2
