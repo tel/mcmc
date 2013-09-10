@@ -21,12 +21,14 @@ import Control.Monad.Primitive
 import Control.Monad.ST
 import Data.Primitive.MutVar
 import Data.Traversable (Traversable)
+import Data.Foldable (foldMap)
 import Linear.Affine
 import Linear.Vector
 import Numeric.AD
 import Numeric.AD.Types (AD, Mode)
 import Numeric.Log
 import System.Random.MWC
+import System.Random.MWC.Distributions
 import qualified Data.Vector as V
 
 import Linear.V1
@@ -38,8 +40,9 @@ type LL   f a = Point f a -> a
 -- | A vector field synonym
 type VF   f a = Point f a -> f a
 
--- | Proposed sample
-type Prop m f a = Point f a -> m (Point f a)
+-- | Stepper of a location (a proposal distribution or a final
+-- stepping distribution).
+type Jump m f a = Point f a -> m (Point f a)
 
 
 -- | Takes a single, symmetric Metropolis-Hastings step according to
@@ -47,8 +50,7 @@ type Prop m f a = Point f a -> m (Point f a)
 
 metropolis
   :: (RealFloat a, Precise a, Variate a, Ord a, PrimMonad m)
-     => Prop m f a -> LL f a -> Gen (PrimState m)
-     -> Point f a -> m (Point f a)
+     => Jump m f a -> LL f a -> Gen (PrimState m) -> Jump m f a
 metropolis q l gen x0 =
   do prop <- q x0
      test <- uniformR (0, 1) gen
@@ -56,11 +58,11 @@ metropolis q l gen x0 =
 {-# INLINE metropolis #-}
 
 
-hamiltonian
-  :: (RealFloat a, Precise a, Variate a, Ord a, PrimMonad m)
-     => Prop m f a -> LL f a -> Gen (PrimState m)
-     -> Point f a -> m (Point f a)
-hamiltonian = undefined
+-- hamiltonian
+--   :: (RealFloat a, Precise a, Variate a, Ord a, PrimMonad m)
+--      => Prop m f a -> LL f a -> Gen (PrimState m)
+--      -> Point f a -> m (Point f a)
+-- hamiltonian = undefined
 
 data Hamiltonian f a =
   Hamiltonian { _position :: Point f a
@@ -120,7 +122,20 @@ leapfrog g = leap g . frog . leap g
 
 {-# INLINE leapfrog #-}
 
+-- | Computes a Hamiltonian step
 
+hamiltonian
+  :: (Fractional a, Ord a, Traversable f, Additive f, PrimMonad m, Variate a)
+     => Gen (PrimState m) -> m (f a)
+     -> VF f a -> LL f a -> Int -> a
+     -> Jump m f a
+hamiltonian gen flick vf l steps eps x0 = do
+  momentum <- flick
+  let -- vf = gradP l
+      h0 = Hamiltonian x0 momentum eps
+      prop = iterate (leapfrog vf) h0 ^?! ix steps . position
+  test <- uniformR (0, 1) gen
+  return $ if (test < l prop / l x0) then prop else x0
 
 -- | Warning, not atomic.
      
@@ -129,20 +144,18 @@ modifyMutM var f = do { x <- readMutVar var; x' <- f x; writeMutVar var x'; retu
 {-# INLINE modifyMutM #-}
 
 
--- | Burn-in then sample `n` points using symmetric
--- Metropolis-Hastings steps.
+-- | Burn-in then sample `n` points from any jumping algorithm
 
 sample
   :: (RealFloat a, Precise a, Variate a, Ord a, PrimMonad m)
-     => Prop m f a -> LL f a -> Gen (PrimState m)
-     -> Int -> Int -> Point f a -> m (V.Vector (Point f a))
-sample q l gen burn n x0 = do
+     => Jump m f a -> Int -> Int -> Point f a -> m (V.Vector (Point f a))
+sample jump burn n x0 = do
   ref <- newMutVar x0
-  replicateM_ burn $ modifyMutM ref (metropolis q l gen)
-  V.replicateM n $ modifyMutM ref (metropolis q l gen)
+  replicateM_ burn $ modifyMutM ref jump
+  V.replicateM n $ modifyMutM ref jump
 {-# INLINE sample #-}
 
-uniQ :: (Num a, Variate a, PrimMonad m) => Gen (PrimState m) -> Prop m V1 a
+uniQ :: (Num a, Variate a, PrimMonad m) => Gen (PrimState m) -> Jump m V1 a
 uniQ gen _ = liftM return $ uniformR (0, 1) gen
 
 lik :: Floating a => LL V1 a
