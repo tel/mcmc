@@ -19,14 +19,15 @@ import Control.Lens
 import Control.Monad
 import Control.Monad.Primitive
 import Control.Monad.ST
+import Data.Foldable (foldMap)
 import Data.Primitive.MutVar
 import Data.Traversable (Traversable)
-import Data.Foldable (foldMap)
 import Linear.Affine
 import Linear.Vector
 import Numeric.AD
 import Numeric.AD.Types (AD, Mode)
 import Numeric.Log
+import Pipes
 import System.Random.MWC
 import System.Random.MWC.Distributions
 import qualified Data.Vector as V
@@ -119,7 +120,7 @@ leapfrog g = leap g . frog . leap g
 -- | Computes a Hamiltonian step
 
 hamiltonian
-  :: (Fractional a, Ord a, Traversable f, Additive f, PrimMonad m, Variate a)
+  :: (Fractional a, Ord a, Variate a, Traversable f, Additive f, PrimMonad m)
      => Gen (PrimState m)
      -> m (f a) -- ^ the momentum \"flick\"er. If we had to generate
                 -- this ourselves we'd be far less general, both in
@@ -139,20 +140,36 @@ hamiltonian gen flick l vf steps eps x0 = do
 -- | Warning, not atomic.
      
 modifyMutM :: PrimMonad m => MutVar (PrimState m) a -> (a -> m a) -> m a
-modifyMutM var f = do { x <- readMutVar var; x' <- f x; writeMutVar var x'; return x' }
+modifyMutM var f = modifyMutM' var (liftM (\a -> (a,a)) . f)
 {-# INLINE modifyMutM #-}
 
+modifyMutM' :: PrimMonad m => MutVar (PrimState m) a -> (a -> m (a, b)) -> m b
+modifyMutM' var f = do { x <- readMutVar var; (x', o) <- f x; writeMutVar var x'; return o }
+{-# INLINE modifyMutM' #-}
 
 -- | Burn-in then sample `n` points from any jumping algorithm
 
 sample
-  :: (RealFloat a, Precise a, Variate a, Ord a, PrimMonad m)
-     => Jump m f a -> Int -> Int -> Point f a -> m (V.Vector (Point f a))
+  :: PrimMonad m => Jump m f a -> Int -> Int -> Point f a -> m (V.Vector (Point f a))
 sample jump burn n x0 = do
   ref <- newMutVar x0
   replicateM_ burn $ modifyMutM ref jump
   V.replicateM n $ modifyMutM ref jump
 {-# INLINE sample #-}
+
+-- | Reified sampling stream
+
+stream
+  :: PrimMonad m => Jump m f a -> Int -> Point f a -> Producer (Point f a) m r
+stream jump burn x0 = do
+  ref <- lift $ do ref <- newMutVar x0
+                   replicateM_ burn $ modifyMutM ref jump
+                   return ref
+  go ref
+  where go ref = do s <- lift $ modifyMutM ref jump
+                    yield s
+                    go ref
+
 
 uniQ :: (Num a, Variate a, PrimMonad m) => Gen (PrimState m) -> Jump m V1 a
 uniQ gen _ = liftM return $ uniformR (0, 1) gen
