@@ -121,7 +121,11 @@ leapfrog g = leap g . frog . leap g
 hamiltonian
   :: (Fractional a, Ord a, Traversable f, Additive f, PrimMonad m, Variate a)
      => Gen (PrimState m)
-     -> m (f a)
+     -> m (f a) -- ^ the momentum \"flick\"er. If we had to generate
+                -- this ourselves we'd be far less general, both in
+                -- the constraints to this function and to our ability
+                -- to introduce momentum exclusively in certain
+                -- dimensions, for instance.
      -> LL f a -> VF f a -> Int -> a
      -> Jump m f a
 hamiltonian gen flick l vf steps eps x0 = do
