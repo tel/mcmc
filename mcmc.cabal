@@ -19,6 +19,7 @@ library
     Numeric.Sampling.MCMC
   build-depends:       base >=4.6 && <4.7
                      , ad
+                     , lens
                      , linear
                      , log-domain
                      , mwc-random
