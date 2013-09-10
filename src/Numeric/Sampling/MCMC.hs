@@ -35,10 +35,10 @@ import Linear.V1
 
 -- | Loglik. I'd love to use "Numeric.Log" to tag the output value as
 -- log domain, but that won't play nicely with "Numeric.AD".
-type LL   f a = Point f a -> a
+type LL   f a   = Point f a -> a
 
 -- | A vector field synonym
-type VF   f a = Point f a -> f a
+type VF   f a   = Point f a -> f a
 
 -- | Stepper of a location (a proposal distribution or a final
 -- stepping distribution).
