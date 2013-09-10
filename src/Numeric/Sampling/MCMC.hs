@@ -171,7 +171,7 @@ sample burn n x0 jump = do
   V.replicateM n $ modifyPrimRefM ref jump
 {-# INLINE sample #-}
 
--- -- | Reified sampling stream
+-- | Reified sampling stream
 
 stream
   :: IsPrim m => Int -> Point f a
