@@ -58,12 +58,6 @@ metropolis q l gen x0 =
 {-# INLINE metropolis #-}
 
 
--- hamiltonian
---   :: (RealFloat a, Precise a, Variate a, Ord a, PrimMonad m)
---      => Prop m f a -> LL f a -> Gen (PrimState m)
---      -> Point f a -> m (Point f a)
--- hamiltonian = undefined
-
 data Hamiltonian f a =
   Hamiltonian { _position :: Point f a
               , _momentum :: f a
