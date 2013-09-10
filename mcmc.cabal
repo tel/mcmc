@@ -23,7 +23,9 @@ library
                      , linear
                      , log-domain
                      , mwc-random
+                     , mwc-random-monad
                      , primitive
+                     , monad-primitive
                      , vector
                      , pipes
   hs-source-dirs:      src

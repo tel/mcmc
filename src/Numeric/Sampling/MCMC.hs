@@ -10,17 +10,20 @@
 -- 
 -- Symmetric Metropolis sampling.
 
-{-# LANGUAGE RankNTypes, TemplateHaskell #-}
-
+{-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE ConstraintKinds #-}
 module Numeric.Sampling.MCMC where
 
 import Control.Applicative
 import Control.Lens
 import Control.Monad
 import Control.Monad.Primitive
+import Control.Monad.Primitive.Class
 import Control.Monad.ST
 import Data.Foldable (foldMap)
-import Data.Primitive.MutVar
+import Data.PrimRef
 import Data.Traversable (Traversable)
 import Linear.Affine
 import Linear.Vector
@@ -28,8 +31,9 @@ import Numeric.AD
 import Numeric.AD.Types (AD, Mode)
 import Numeric.Log
 import Pipes
-import System.Random.MWC
-import System.Random.MWC.Distributions
+import System.Random.MWC (Variate, Gen)
+import System.Random.MWC.Monad
+import System.Random.MWC.Distributions.Monad
 import qualified Data.Vector as V
 
 import Linear.V1
@@ -50,11 +54,11 @@ type Jump m f a = Point f a -> m (Point f a)
 -- the given proposal distribution and goal log-likelihood.
 
 metropolis
-  :: (RealFloat a, Precise a, Variate a, Ord a, PrimMonad m)
-     => Jump m f a -> LL f a -> Gen (PrimState m) -> Jump m f a
-metropolis q l gen x0 =
+  :: (RealFloat a, Precise a, Variate a, Ord a, MonadPrim m) 
+     => Jump (Rand m) f a -> LL f a -> Jump (Rand m) f a
+metropolis q l x0 =
   do prop <- q x0
-     test <- uniformR (0, 1) gen
+     test <- uniformR (0, 1)
      return $ if (test < l prop / l x0) then prop else x0
 {-# INLINE metropolis #-}
 
@@ -120,59 +124,65 @@ leapfrog g = leap g . frog . leap g
 -- | Computes a Hamiltonian step
 
 hamiltonian
-  :: (Fractional a, Ord a, Variate a, Traversable f, Additive f, PrimMonad m)
-     => Gen (PrimState m)
-     -> m (f a) -- ^ the momentum \"flick\"er. If we had to generate
-                -- this ourselves we'd be far less general, both in
-                -- the constraints to this function and to our ability
-                -- to introduce momentum exclusively in certain
-                -- dimensions, for instance.
+  :: (Fractional a, Ord a, Variate a, Traversable f, Additive f, MonadPrim m)
+     => Rand m (f a) -- ^ the momentum \"flick\"er. If we had to
+                     -- generate this ourselves we'd be far less
+                     -- general, both in the constraints to this
+                     -- function and to our ability to introduce
+                     -- momentum exclusively in certain dimensions,
+                     -- for instance.
      -> LL f a -> VF f a -> Int -> a
-     -> Jump m f a
-hamiltonian gen flick l vf steps eps x0 = do
+     -> Jump (Rand m) f a
+hamiltonian flick l vf steps eps x0 = do
   momentum <- flick
   let h0 = Hamiltonian x0 momentum eps
       prop = h0 ^?! dropping steps (iterated $ leapfrog vf) . position
-  test <- uniformR (0, 1) gen
+  test <- uniformR (0, 1)
   return $ if (test < l prop / l x0) then prop else x0
 {-# INLINE hamiltonian #-}
 
+-- | Contract to the compiler stating that 'm' is a bottom layer of a
+-- 'MonadPrim' stack.
+type IsPrim m = (m ~ BasePrimMonad m, PrimMonad m, MonadPrim m)
+
 -- | Warning, not atomic.
      
-modifyMutM :: PrimMonad m => MutVar (PrimState m) a -> (a -> m a) -> m a
-modifyMutM var f = modifyMutM' var (liftM (\a -> (a,a)) . f)
-{-# INLINE modifyMutM #-}
+modifyPrimRefM
+  ::  IsPrim m => PrimRef m a -> (a -> Rand m a) -> Rand m a
+modifyPrimRefM var f = modifyPrimRefM' var (liftM (\a -> (a,a)) . f)
+{-# INLINE modifyPrimRefM #-}
 
-modifyMutM' :: PrimMonad m => MutVar (PrimState m) a -> (a -> m (a, b)) -> m b
-modifyMutM' var f = do { x <- readMutVar var; (x', o) <- f x; writeMutVar var x'; return o }
-{-# INLINE modifyMutM' #-}
+modifyPrimRefM'
+  :: IsPrim m => PrimRef m a -> (a -> Rand m (a, b)) -> Rand m b
+modifyPrimRefM' var f = toRand $ \gen -> do
+  x <- readPrimRef var
+  (x', o) <- runRand (f x) gen
+  writePrimRef var x'
+  return o
+{-# INLINE modifyPrimRefM' #-}
 
 -- | Burn-in then sample `n` points from any jumping algorithm
 
-sample
-  :: PrimMonad m => Jump m f a -> Int -> Int -> Point f a -> m (V.Vector (Point f a))
+sample :: IsPrim m => (a -> Rand m a) -> Int -> Int -> a -> Rand m (V.Vector a)
 sample jump burn n x0 = do
-  ref <- newMutVar x0
-  replicateM_ burn $ modifyMutM ref jump
-  V.replicateM n $ modifyMutM ref jump
+  ref <- liftPrim (newPrimRef x0)
+  replicateM_ burn $ modifyPrimRefM ref jump
+  V.replicateM n $ modifyPrimRefM ref jump
 {-# INLINE sample #-}
 
--- | Reified sampling stream
+-- -- | Reified sampling stream
 
 stream
-  :: PrimMonad m => Jump m f a -> Int -> Point f a -> Producer (Point f a) m r
+  :: IsPrim m => Jump (Rand m) f a -> Int -> Point f a -> Producer (Point f a) (Rand m) r
 stream jump burn x0 = do
-  ref <- lift $ do ref <- newMutVar x0
-                   replicateM_ burn $ modifyMutM ref jump
+  ref <- lift $ do ref <- liftPrim (newPrimRef x0)
+                   replicateM_ burn $ modifyPrimRefM ref jump
                    return ref
-  go ref
-  where go ref = do s <- lift $ modifyMutM ref jump
-                    yield s
-                    go ref
+  forever $ lift (modifyPrimRefM ref jump) >>= yield
 
 
-uniQ :: (Num a, Variate a, PrimMonad m) => Gen (PrimState m) -> Jump m V1 a
-uniQ gen _ = liftM return $ uniformR (0, 1) gen
+-- uniQ :: (Num a, Variate a, PrimMonad m) => Gen (PrimState m) -> Jump m V1 a
+-- uniQ gen _ = liftM return $ uniformR (0, 1) gen
 
-lik :: Floating a => LL V1 a
-lik (P (V1 x)) = x
+-- lik :: Floating a => LL V1 a
+-- lik (P (V1 x)) = x
