@@ -66,7 +66,6 @@ metropolis q l x0 =
 data Hamiltonian f a =
   Hamiltonian { _position :: Point f a
               , _momentum :: f a
-              , _epsilon  :: a
               }
 makeLenses ''Hamiltonian
 
@@ -101,24 +100,19 @@ gradP ll = isVec . grad ll
 
 leapfrog
   :: (Traversable f, Additive f, Fractional a)
-     => VF f a -> Hamiltonian f a -> Hamiltonian f a
-leapfrog g = leap g . frog . leap g
+     => a -> VF f a -> Hamiltonian f a -> Hamiltonian f a
+leapfrog eps g = leap eps g . frog eps . leap eps g
   where
-    half :: Fractional a => a -> a
-    half x = x/2
-    {-# INLINE half #-}
-
-    leap :: (Additive f, Fractional a) => VF f a -> Hamiltonian f a -> Hamiltonian f a
-    leap gradAt h = h & momentum ^+^~ (h ^. epsilon . to half . to (*^ perturbation))
-      where perturbation = h ^. position . to gradAt
+    leap :: (Additive f, Fractional a)
+            => a -> VF f a -> Hamiltonian f a -> Hamiltonian f a
+    leap eps gradAt h = h & momentum ^+^~ (eps/2 *^ gradAt (h ^. position))
     {-# INLINE leap #-}
-
-    frog :: (Additive f, Fractional a) => Hamiltonian f a -> Hamiltonian f a
-    frog h = h & position .+^~ (eps *^ mom) where
-      mom = h ^. momentum
-      eps = h ^. epsilon . to half
-    {-# INLINE frog #-}
-
+    
+    frog :: (Additive f, Fractional a)
+            => a -> Hamiltonian f a -> Hamiltonian f a
+    frog eps h = h & position .+^~ (eps/2 *^ (h ^. momentum))
+    {-# INLINE frog #-}       
+    
 {-# INLINE leapfrog #-}
 
 -- | Computes a Hamiltonian step
@@ -136,7 +130,7 @@ hamiltonian
 hamiltonian flick l vf steps eps x0 = do
   momentum <- flick
   let h0 = Hamiltonian x0 momentum eps
-      prop = h0 ^?! dropping steps (iterated $ leapfrog vf) . position
+      prop = h0 ^?! dropping steps (iterated $ leapfrog eps vf) . position
   test <- uniformR (0, 1)
   return $ if (test < l prop / l x0) then prop else x0
 {-# INLINE hamiltonian #-}
