@@ -120,13 +120,13 @@ leapfrog g = leap g . frog . leap g
 
 hamiltonian
   :: (Fractional a, Ord a, Traversable f, Additive f, PrimMonad m, Variate a)
-     => Gen (PrimState m) -> m (f a)
-     -> (forall a . Num a => LL f a) -> Int -> a
+     => Gen (PrimState m)
+     -> m (f a)
+     -> LL f a -> VF f a -> Int -> a
      -> Jump m f a
-hamiltonian gen flick l steps eps x0 = do
+hamiltonian gen flick l vf steps eps x0 = do
   momentum <- flick
-  let vf = gradP l
-      h0 = Hamiltonian x0 momentum eps
+  let h0 = Hamiltonian x0 momentum eps
       prop = h0 ^?! dropping steps (iterated $ leapfrog vf) . position
   test <- uniformR (0, 1) gen
   return $ if (test < l prop / l x0) then prop else x0
@@ -154,4 +154,4 @@ uniQ :: (Num a, Variate a, PrimMonad m) => Gen (PrimState m) -> Jump m V1 a
 uniQ gen _ = liftM return $ uniformR (0, 1) gen
 
 lik :: Floating a => LL V1 a
-lik (P (V1 x)) = (1-x)
+lik (P (V1 x)) = x
