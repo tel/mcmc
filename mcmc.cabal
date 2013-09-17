@@ -16,12 +16,16 @@ cabal-version:       >=1.10
 
 library
   exposed-modules:     
+    Numeric.Sampling.MCMC2
     Numeric.Sampling.MCMC
   build-depends:       base >=4.6 && <4.7
                      , ad
                      , lens
+                     , comonad
                      , linear
+                     , free
                      , log-domain
+                     , MonadRandom
                      , mwc-random
                      , mwc-random-monad
                      , primitive

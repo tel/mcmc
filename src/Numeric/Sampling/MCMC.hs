@@ -115,25 +115,36 @@ leapfrog eps g = leap eps g . frog eps . leap eps g
     
 {-# INLINE leapfrog #-}
 
+-- | The momentum \"flick\"er. If we had to generate this ourselves
+-- we'd be far less general, both in the constraints to this function
+-- and to our ability to introduce momentum exclusively in certain
+-- dimensions, for instance.
+type Flick m f a = Rand m (f a)
+
 -- | Computes a Hamiltonian step
 
 hamiltonian
   :: (Fractional a, Ord a, Variate a, Traversable f, Additive f, MonadPrim m)
-     => Rand m (f a) -- ^ the momentum \"flick\"er. If we had to
-                     -- generate this ourselves we'd be far less
-                     -- general, both in the constraints to this
-                     -- function and to our ability to introduce
-                     -- momentum exclusively in certain dimensions,
-                     -- for instance.
+     => Flick m f a 
      -> LL f a -> VF f a -> Int -> a
      -> Jump (Rand m) f a
 hamiltonian flick l vf steps eps x0 = do
   momentum <- flick
-  let h0 = Hamiltonian x0 momentum eps
+  let h0 = Hamiltonian x0 momentum
       prop = h0 ^?! dropping steps (iterated $ leapfrog eps vf) . position
   test <- uniformR (0, 1)
   return $ if (test < l prop / l x0) then prop else x0
 {-# INLINE hamiltonian #-}
+
+
+-- | Estimates a good guess for an initial epsilon value. This gets
+-- adjusted during Nesterov Dual Averaging.
+
+initEpsilon :: Flick m f a  -> LL f a -> VF f a -> f a -> a
+initEpsilon flick ll vf x0 = do
+  momentum <- flick
+  leapfrog 1 vf (Hamiltonian x0 momentum)
+
 
 -- | Contract to the compiler stating that 'm' is a bottom layer of a
 -- 'MonadPrim' stack.
