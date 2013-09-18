@@ -20,6 +20,7 @@ library
     Numeric.Sampling.MCMC
     Numeric.Sampling.Util
     Numeric.Sampling.Types
+    Numeric.Sampling.Samplers
   build-depends:       base >=4.6 && <4.7
                      , ad
                      , lens

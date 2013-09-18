@@ -1,4 +1,5 @@
 {-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE RankNTypes #-}
 
 module Numeric.Sampling.Util where
 
@@ -33,8 +34,16 @@ leapfrog eps field = leap . frog . leap where
   {-# INLINE frog #-}
 {-# INLINE leapfrog #-}
 
+flickStateS
+  :: (Traversable f, MonadRandom m, Random a)
+     => Flick m a -> Point f a -> m (StateS f a)
+flickStateS flick x = liftM (StateS x . unP) (flick x)
+
 -- | Not particularly great random momentum "flicking"
-randomMomentum
+uniformMomentumStateS
   :: (Traversable f, MonadRandom m, Random a)
      => Point f a -> m (StateS f a)
-randomMomentum x = liftM (StateS x . unP) (Data.Traversable.mapM (const getRandom) x)
+uniformMomentumStateS x = liftM (StateS x . unP) (uniformFlick x)
+
+uniformFlick :: (MonadRandom m, Random a) => Flick m a
+uniformFlick = Data.Traversable.mapM (const getRandom)

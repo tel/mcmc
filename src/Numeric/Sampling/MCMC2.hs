@@ -57,10 +57,10 @@ metropolis p jump x0 = jump x0 >>= tryReject p x0
 hamiltonian
   :: (MonadRandom m, Smooth a, Ord a, Random a, Traversable f, Additive f)
      => Scalar f a -> Int
-     -> (Point f a -> m (StateS f a)) -> C1Obj f a
+     -> Flick m a -> C1Obj f a
      -> Sampler m f a
-hamiltonian eps n mkStM c1 x0 = do
-  st <- mkStM x0
+hamiltonian eps n flick c1 x0 = do
+  st <- flickStateS flick x0
   tryReject (c1 ^. fn) x0
     $ st ^?! dropping n (iterated $ leapfrog eps (c1 ^. grd)) . pos
 {-# INLINE hamiltonian #-}
