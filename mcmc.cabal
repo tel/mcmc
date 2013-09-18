@@ -16,7 +16,7 @@ cabal-version:       >=1.10
 
 library
   exposed-modules:     
-    Numeric.Sampling.MCMC2
+    Numeric.Sampling.DualAveraging
     Numeric.Sampling.MCMC
     Numeric.Sampling.Util
     Numeric.Sampling.Types
