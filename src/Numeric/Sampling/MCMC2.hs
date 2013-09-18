@@ -14,29 +14,13 @@ import Linear.Affine
 import Linear.Vector
 import Numeric.AD
 import Numeric.AD.Types (AD, Mode)
-import Numeric.AD.Internal.Classes (Lifted)
 import Data.Foldable
 import Data.Traversable
 import Linear.V2
 import System.Random.MWC
 
-type Scalar    (f :: * -> *) a =                         a
-type Obj       (f :: * -> *) a = Point f a ->            a
-type Grad      (f :: * -> *) a = Point f a ->          f a
-type Sampler m (f :: * -> *) a = Point f a -> m (Point f a)
-
-data StateS f a = StateS { _pos :: Point f a, _mom :: f a }
-makeLenses ''StateS
-
-data C1Obj f a = C1Obj { _fn :: Obj f a, _grd :: Grad f a }
-makeLenses ''C1Obj
-
-class (RealFrac a, Floating a) => Smooth a
-instance (Lifted f, Smooth a) => Smooth (AD f a)
-
-unP :: Point f x -> f x
-unP (P x) = x
-{-# INLINE unP #-}
+import Numeric.Sampling.Util
+import Numeric.Sampling.Types
 
 rosen :: Smooth a => C1Obj V2 a
 rosen = naturalC1 $ \(P (V2 x y)) -> (1 - x)^2 + 100 * (y - x ^ 2)^2
@@ -70,23 +54,6 @@ metropolis
 metropolis p jump x0 = jump x0 >>= tryReject p x0
 {-# INLINE metropolis #-}
 
-(^+^~) :: (Num a, Additive f) => Setting (->) s t (f a) (f a) -> f a -> s -> t
-l ^+^~ a = over l (^+^ a)
-{-# INLINE (^+^~) #-}
-
-(.+^~) :: (Num a, Affine f) => Setting (->) s t (f a) (f a) -> Diff f a -> s -> t
-l .+^~ a = over l (.+^ a)
-{-# INLINE (.+^~) #-}
-
--- | A Hamiltonian leapfrog integration step.
-leapfrog :: (Additive f, Fractional a) => Scalar f a -> Grad f a -> StateS f a -> StateS f a
-leapfrog eps field = leap . frog . leap where
-  leap h = h & mom ^+^~ (eps/2 *^ field (h ^. pos))
-  {-# INLINE leap #-}
-  frog h = h & pos .+^~ (eps/2 *^       (h ^. mom))
-  {-# INLINE frog #-}
-{-# INLINE leapfrog #-}
-
 hamiltonian
   :: (MonadRandom m, Smooth a, Ord a, Random a, Traversable f, Additive f)
      => Scalar f a -> Int
@@ -97,9 +64,3 @@ hamiltonian eps n mkStM c1 x0 = do
   tryReject (c1 ^. fn) x0
     $ st ^?! dropping n (iterated $ leapfrog eps (c1 ^. grd)) . pos
 {-# INLINE hamiltonian #-}
-
--- | Not particularly great random momentum "flicking"
-randomMomentum
-  :: (Traversable f, MonadRandom m, Random a)
-     => Point f a -> m (StateS f a)
-randomMomentum x = liftM (StateS x . unP) (Data.Traversable.mapM (const getRandom) x)
