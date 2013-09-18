@@ -29,9 +29,7 @@ l .+^~ a = over l (.+^ a)
 leapfrog :: (Additive f, Fractional a) => Scalar f a -> Grad f a -> StateS f a -> StateS f a
 leapfrog eps field = leap . frog . leap where
   leap h = h & mom ^+^~ (eps/2 *^ field (h ^. pos))
-  {-# INLINE leap #-}
   frog h = h & pos .+^~ (eps/2 *^       (h ^. mom))
-  {-# INLINE frog #-}
 {-# INLINE leapfrog #-}
 
 flickStateS

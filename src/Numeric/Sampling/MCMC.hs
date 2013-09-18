@@ -5,18 +5,19 @@
 module Numeric.Sampling.MCMC where
 
 import Control.Applicative
-import Control.Monad
-import Control.Monad.Random
 import Control.Comonad
 import Control.Comonad.Cofree
 import Control.Lens
+import Control.Monad
+import Control.Monad.Random
+import Data.Foldable
+import Data.Traversable
 import Linear.Affine
+import Linear.Metric
+import Linear.V2
 import Linear.Vector
 import Numeric.AD
 import Numeric.AD.Types (AD, Mode)
-import Data.Foldable
-import Data.Traversable
-import Linear.V2
 import System.Random.MWC
 
 import Numeric.Sampling.Util
@@ -55,12 +56,15 @@ metropolis p jump x0 = jump x0 >>= tryReject p x0
 {-# INLINE metropolis #-}
 
 hamiltonian
-  :: (MonadRandom m, Fractional a, Ord a, Random a, Traversable f, Additive f)
+  :: (MonadRandom m, Fractional a, Ord a, Random a, Traversable f, Metric f)
      => Scalar f a -> Int
      -> Flick m a -> C1Obj f a
      -> Sampler m f a
 hamiltonian eps n flick c1 x0 = do
-  st <- flickStateS flick x0
-  tryReject (c1 ^. fn) x0
-    $ st ^?! dropping n (iterated $ leapfrog eps (c1 ^. grd)) . pos
+  st  <- flickStateS flick x0
+  st' <- tryReject lik st (iter st)
+  return (st' ^. pos)
+  where
+    lik  st = view fn c1 (st ^. pos) - (st ^. mom . to quadrance)/2
+    iter st = st ^?! dropping n (iterated $ leapfrog eps (c1 ^. grd))
 {-# INLINE hamiltonian #-}
