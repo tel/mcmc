@@ -1,193 +1,66 @@
-
--- |
--- Module      : Numeric.Sampling.MCMC
--- Copyright   : (c) Joseph Abrahamson 2013
--- License     : MIT
--- 
--- Maintainer  : me@jspha.com
--- Stability   : experimental
--- Portability : non-portable
--- 
--- Symmetric Metropolis sampling.
-
-{-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE TemplateHaskell #-}
-{-# LANGUAGE TypeFamilies #-}
-{-# LANGUAGE ConstraintKinds #-}
+{-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE KindSignatures #-}
 
 module Numeric.Sampling.MCMC where
 
 import Control.Applicative
-import Control.Lens
 import Control.Monad
-import Control.Monad.Primitive
-import Control.Monad.Primitive.Class
-import Control.Monad.ST
-import Data.Foldable (foldMap)
-import Data.PrimRef
-import Data.Traversable (Traversable)
+import Control.Monad.Random
+import Control.Comonad
+import Control.Comonad.Cofree
+import Control.Lens
 import Linear.Affine
 import Linear.Vector
 import Numeric.AD
 import Numeric.AD.Types (AD, Mode)
-import Numeric.Log
-import Pipes
-import System.Random.MWC (Variate, Gen)
-import System.Random.MWC.Monad
-import System.Random.MWC.Distributions.Monad
-import qualified Data.Vector as V
-
+import Data.Foldable
+import Data.Traversable
 import Linear.V2
+import System.Random.MWC
 
--- | Loglik. I'd love to use "Numeric.Log" to tag the output value as
--- log domain, but that won't play nicely with "Numeric.AD".
-type LL   f a   = Point f a -> a
+import Numeric.Sampling.Util
+import Numeric.Sampling.Types
 
--- | A vector field synonym
-type VF   f a   = Point f a -> f a
+rosen :: RealFloat a => C1Obj V2 a
+rosen = naturalC1 $ \(P (V2 x y)) -> (1 - x)^2 + 100 * (y - x ^ 2)^2
 
--- | Stepper of a location (a proposal distribution or a final
--- stepping distribution).
-type Jump m f a = Point f a -> m (Point f a)
+naturalC1 :: (Traversable f, RealFloat a) => (forall a . RealFloat a => Obj f a) -> C1Obj f a
+naturalC1 p = C1Obj p (unP . grad p)
 
--- | Takes a single, symmetric Metropolis-Hastings step according to
--- the given proposal distribution and goal log-likelihood.
+-- | Compute the initial state space based on a differentiable function.
+naturalS
+  :: (Num a, Traversable f)
+     => (forall s. f (AD s a) -> AD s a)
+     -> Point f a -> StateS f a
+naturalS f px@(P x) = StateS px (grad f x)
 
+tryReject
+  :: (Fractional a, Ord a, Random a, MonadRandom m) =>
+     (b -> a) -> b -> b -> m b
+tryReject f x0 x1 = do
+  coin <- getRandomR (0, 1)
+  return (if (coin < f x1 / f x0) then x1 else x0)
+{-# INLINE tryReject #-}
+
+-- | Refines an approximate sampler using a metropolis style rejection
+-- step. This is only unbiased if the original sampler is symmetric,
+-- i.e. @x' == jump x@ is equally likely as @x = jump x'@. This uses
+-- direct division in computing the next step, so there may be
+-- stability issues unless the base numeric type is compensated.
 metropolis
-  :: (RealFloat a, Precise a, Variate a, Ord a, MonadPrim m) 
-     => Jump (Rand m) f a -> LL f a -> Jump (Rand m) f a
-metropolis q l x0 =
-  do prop <- q x0
-     test <- uniformR (0, 1)
-     return $ if (test < l prop / l x0) then prop else x0
+  :: (Fractional a, Ord a, Random a, MonadRandom m)
+     => Obj f a -> Sampler m f a -> Sampler m f a
+metropolis p jump x0 = jump x0 >>= tryReject p x0
 {-# INLINE metropolis #-}
 
-
-data Hamiltonian f a =
-  Hamiltonian { _position :: Point f a
-              , _momentum :: f a
-              }
-makeLenses ''Hamiltonian
-
--- | Declares that a point should be interpreted as a vector.
-
-isVec :: Point f a -> f a
-isVec (P a) = a
-
-(^+^~) :: (Num a, Additive f) => Setting (->) s t (f a) (f a) -> f a -> s -> t
-l ^+^~ a = over l (^+^ a)
-{-# INLINE (^+^~) #-}
-
-(.+^~) :: (Num a, Affine f) => Setting (->) s t (f a) (f a) -> Diff f a -> s -> t
-l .+^~ a = over l (.+^ a)
-{-# INLINE (.+^~) #-}
-
-(^-^~) :: (Num a, Additive f) => Setting (->) s t (f a) (f a) -> f a -> s -> t
-l ^-^~ a = over l (^-^ a)
-{-# INLINE (^-^~) #-}
-
-
--- | 'grad' with a slightly more informative type signature.
-
-gradP
-  :: (Num a, Traversable f)
-     => (forall s. Mode s => Point f (AD s a) -> AD s a)
-     -> Point f a -> f a
-gradP ll = isVec . grad ll
-{-# INLINE gradP #-}
-
--- | Perform a single leapfrog integration step
-
-leapfrog
-  :: (Traversable f, Additive f, Fractional a)
-     => a -> VF f a -> Hamiltonian f a -> Hamiltonian f a
-leapfrog eps g = leap eps g . frog eps . leap eps g
-  where
-    leap :: (Additive f, Fractional a)
-            => a -> VF f a -> Hamiltonian f a -> Hamiltonian f a
-    leap eps gradAt h = h & momentum ^+^~ (eps/2 *^ gradAt (h ^. position))
-    {-# INLINE leap #-}
-    
-    frog :: (Additive f, Fractional a)
-            => a -> Hamiltonian f a -> Hamiltonian f a
-    frog eps h = h & position .+^~ (eps/2 *^ (h ^. momentum))
-    {-# INLINE frog #-}       
-    
-{-# INLINE leapfrog #-}
-
--- | The momentum \"flick\"er. If we had to generate this ourselves
--- we'd be far less general, both in the constraints to this function
--- and to our ability to introduce momentum exclusively in certain
--- dimensions, for instance.
-type Flick m f a = Rand m (f a)
-
--- | Computes a Hamiltonian step
-
 hamiltonian
-  :: (Fractional a, Ord a, Variate a, Traversable f, Additive f, MonadPrim m)
-     => Flick m f a 
-     -> LL f a -> VF f a -> Int -> a
-     -> Jump (Rand m) f a
-hamiltonian flick l vf steps eps x0 = do
-  momentum <- flick
-  let h0 = Hamiltonian x0 momentum
-      prop = h0 ^?! dropping steps (iterated $ leapfrog eps vf) . position
-  test <- uniformR (0, 1)
-  return $ if (test < l prop / l x0) then prop else x0
+  :: (MonadRandom m, Fractional a, Ord a, Random a, Traversable f, Additive f)
+     => Scalar f a -> Int
+     -> Flick m a -> C1Obj f a
+     -> Sampler m f a
+hamiltonian eps n flick c1 x0 = do
+  st <- flickStateS flick x0
+  tryReject (c1 ^. fn) x0
+    $ st ^?! dropping n (iterated $ leapfrog eps (c1 ^. grd)) . pos
 {-# INLINE hamiltonian #-}
-
-
--- | Estimates a good guess for an initial epsilon value. This gets
--- adjusted during Nesterov Dual Averaging.
-
-initEpsilon :: Flick m f a  -> LL f a -> VF f a -> f a -> a
-initEpsilon flick ll vf x0 = do
-  momentum <- flick
-  leapfrog 1 vf (Hamiltonian x0 momentum)
-
-
--- | Contract to the compiler stating that 'm' is a bottom layer of a
--- 'MonadPrim' stack.
-type IsPrim m = (m ~ BasePrimMonad m, PrimMonad m, MonadPrim m)
-
--- | Warning, not atomic.
-     
-modifyPrimRefM
-  ::  IsPrim m => PrimRef m a -> (a -> Rand m a) -> Rand m a
-modifyPrimRefM var f = modifyPrimRefM' var (liftM (\a -> (a,a)) . f)
-{-# INLINE modifyPrimRefM #-}
-
-modifyPrimRefM'
-  :: IsPrim m => PrimRef m a -> (a -> Rand m (a, b)) -> Rand m b
-modifyPrimRefM' var f = toRand $ \gen -> do
-  x <- readPrimRef var
-  (x', o) <- runRand (f x) gen
-  writePrimRef var x'
-  return o
-{-# INLINE modifyPrimRefM' #-}
-
--- | Burn-in then sample `n` points from any jumping algorithm
-
-sample :: IsPrim m => Int -> Int -> Point f a
-          -> Jump (Rand m) f a -> Rand m (V.Vector (Point f a))
-sample burn n x0 jump = do
-  ref <- liftPrim (newPrimRef x0)
-  replicateM_ burn $ modifyPrimRefM ref jump
-  V.replicateM n $ modifyPrimRefM ref jump
-{-# INLINE sample #-}
-
--- | Reified sampling stream
-
-stream
-  :: IsPrim m => Int -> Point f a
-     -> Jump (Rand m) f a -> Producer (Point f a) (Rand m) r
-stream burn x0 jump = do
-  ref <- lift $ liftPrim (newPrimRef x0)
-  lift $ replicateM_ burn $ modifyPrimRefM ref jump
-  forever $ lift (modifyPrimRefM ref jump) >>= yield
-
-flick :: MonadPrim m => Double -> Double -> Rand m (V2 Double)
-flick mu sig = V2 <$> normal mu sig <*> normal mu sig
-
-rosen :: Num a => LL V2 a
-rosen (P (V2 x y)) = (1 - x)^2 + 100 * (y - x ^ 2)^2
